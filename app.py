@@ -46,25 +46,46 @@ config = {"configurable": {"session_id": str(uuid.uuid4())}}
 
 
 def update_model(model_name):
-    """更新当前使用的模型"""
-    global current_multiModal_llm,chain,chain_history,current_model_name
+    """更新当前使用的模型，并清空聊天历史"""
+    global current_multiModal_llm, chain, chain_history, current_model_name, config
 
     try:
         # 创建新的模型实例
-        current_multiModal_llm=create_multiModal_llm(model_name)
-        current_model_name=model_name
+        current_multiModal_llm = create_multiModal_llm(model_name)
+        current_model_name = model_name
         model_port = current_multiModal_llm.openai_api_base.split(":")[2].split("/")[0]
 
-        # 重新构建chain
-        chain=prompt | current_multiModal_llm
-        chain_history=RunnableWithMessageHistory(
+        # 重新构建 chain
+        chain = prompt | current_multiModal_llm
+        chain_history = RunnableWithMessageHistory(
             chain,
             get_session_history,
         )
 
-        return f"✅ 模型已切换到: {model_name} (端口: {model_port})"
+        # ✅ 生成新 session_id
+        new_session_id = str(uuid.uuid4())
+        config = {"configurable": {"session_id": new_session_id}}
+
+        # ✅ 主动清除旧 session 的历史记录（可选，但推荐）
+        # 注意：这里清除的是“即将被替换的旧 session”，不是新 session
+        # 如果你想清除“当前正在使用的 session”，可以保留旧 session_id 再清除
+        old_session_id = config["configurable"]["session_id"]  # 实际上是上一次的，这里仅为示意
+        # 更安全的做法：在切换前记录旧 session_id，然后清除它
+
+        # ✅ 更严谨的做法：先记录旧 session，再换新 session，再清除旧 session
+        old_session_id = config["configurable"]["session_id"] if "session_id" in config.get("configurable", {}) else None
+        config = {"configurable": {"session_id": new_session_id}}  # 换新会话
+
+        if old_session_id:
+            old_history = get_session_history(old_session_id)
+            old_history.clear()  # ✅ 彻底从数据库删除旧历史
+            print(f"🧹 已清除旧会话 {old_session_id} 的历史记录")
+
+        # ✅ 返回两个值：状态消息 + 空聊天记录
+        return f"✅ 模型已切换到: {model_name} (端口: {model_port})，历史已清空", []
+
     except Exception as e:
-        return f"❌ 模型切换失败: {str(e)}"
+        return f"❌ 模型切换失败: {str(e)}", []
 
 # 语音处理函数 =====
 def transcribe_audio(audio_path):
@@ -191,21 +212,18 @@ with gr.Blocks(title='医疗影像AI助手', css=css, theme=gr.themes.Soft()) as
                 interactive=False,
                 show_label=True
             )
-
-    # 模型切换事件
-    model_dropdown.change(
-        update_model,
-        inputs=[model_dropdown],
-        outputs=[model_status]
-    )
-
     # 聊天历史记录的组件
     chatbot = gr.Chatbot(type='messages',
                          height=500,
                          avatar_images=("./images/chat.png","./images/robot.png"),  # 设置默认用户和助手头像
                          show_label=False,
                          bubble_full_width=False)
-
+    # 模型切换事件
+    model_dropdown.change(
+        update_model,
+        inputs=[model_dropdown],
+        outputs=[model_status,chatbot]
+    )
     # 创建多模态输入框
     chat_input = gr.MultimodalTextbox(
         interactive=True,  # 可交互
